@@ -991,6 +991,20 @@ int janus_process_incoming_request(janus_request *request) {
 			gboolean do_trickle = TRUE;
 			json_t *jsep_trickle = json_object_get(jsep, "trickle");
 			do_trickle = jsep_trickle ? json_is_true(jsep_trickle) : TRUE;
+			janus_mutex_lock(&handle->mutex);
+			janus_flags_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PENDING_OFFER);
+			if(handle->pending_trickles) {
+				JANUS_LOG(LOG_VERB, "[%"SCNu64"]   -- Clearing %d pending trickle candidates as new offer pending\n", handle->handle_id, g_list_length(handle->pending_trickles));
+				while(handle->pending_trickles) {
+					GList *temp = g_list_first(handle->pending_trickles);
+					handle->pending_trickles = g_list_remove_link(handle->pending_trickles, temp);
+					janus_ice_trickle *trickle = (janus_ice_trickle *)temp->data;
+					g_list_free(temp);
+					janus_ice_trickle_destroy(trickle);
+				}
+				handle->pending_trickles = NULL;
+			}
+			janus_mutex_unlock(&handle->mutex);
 			/* Are we still cleaning up from a previous media session? */
 			if(janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_CLEANING)) {
 				JANUS_LOG(LOG_VERB, "[%"SCNu64"] Still cleaning up from a previous media session, let's wait a bit...\n", handle->handle_id);
@@ -1261,6 +1275,8 @@ int janus_process_incoming_request(janus_request *request) {
 					}
 					/* We got our answer */
 					janus_flags_clear(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PROCESSING_OFFER);
+					/* No longer needs to cache the trickle candidates */
+					janus_flags_clear(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PENDING_OFFER);
 					/* Any pending trickles? */
 					if(handle->pending_trickles) {
 						JANUS_LOG(LOG_VERB, "[%"SCNu64"]   -- Processing %d pending trickle candidates\n", handle->handle_id, g_list_length(handle->pending_trickles));
@@ -1462,7 +1478,8 @@ int janus_process_incoming_request(janus_request *request) {
 			janus_flags_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_TRICKLE);
 		}
 		/* Is there any stream ready? this trickle may get here before the SDP it relates to */
-		if(handle->audio_stream == NULL && handle->video_stream == NULL && handle->data_stream == NULL) {
+		if(janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PENDING_OFFER) ||
+			(handle->audio_stream == NULL && handle->video_stream == NULL && handle->data_stream == NULL)) {
 			JANUS_LOG(LOG_WARN, "[%"SCNu64"] No stream, queueing this trickle as it got here before the SDP...\n", handle->handle_id);
 			/* Enqueue this trickle candidate(s), we'll process this later */
 			janus_ice_trickle *early_trickle = janus_ice_trickle_new(handle, transaction_text, candidate ? candidate : candidates);
@@ -2307,6 +2324,8 @@ int janus_process_incoming_admin_request(janus_request *request) {
 		json_object_set_new(flags, "has-video", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_HAS_VIDEO) ? json_true() : json_false());
 		json_object_set_new(flags, "plan-b", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PLAN_B) ? json_true() : json_false());
 		json_object_set_new(flags, "cleaning", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_CLEANING) ? json_true() : json_false());
+		json_object_set_new(flags, "pending", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PENDING_OFFER) ? json_true() : json_false());
+
 		json_object_set_new(info, "flags", flags);
 		if(handle->agent) {
 			json_object_set_new(info, "agent-created", json_integer(handle->agent_created));
@@ -2874,6 +2893,20 @@ json_t *janus_plugin_handle_sdp(janus_plugin_session *plugin_session, janus_plug
 			JANUS_LOG(LOG_WARN, "[%"SCNu64"]   -- DataChannels have been negotiated, but support for them has not been compiled...\n", ice_handle->handle_id);
 		}
 #endif
+		janus_mutex_lock(&ice_handle->mutex);
+		janus_flags_set(&ice_handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PENDING_OFFER);
+		if(ice_handle->pending_trickles) {
+			JANUS_LOG(LOG_VERB, "[%"SCNu64"]   -- Clearing %d pending trickle candidates as new offer pending\n", ice_handle->handle_id, g_list_length(ice_handle->pending_trickles));
+			while(ice_handle->pending_trickles) {
+				GList *temp = g_list_first(ice_handle->pending_trickles);
+				ice_handle->pending_trickles = g_list_remove_link(ice_handle->pending_trickles, temp);
+				janus_ice_trickle *trickle = (janus_ice_trickle *)temp->data;
+				g_list_free(temp);
+				janus_ice_trickle_destroy(trickle);
+			}
+			ice_handle->pending_trickles = NULL;
+		}
+		janus_mutex_unlock(&ice_handle->mutex);
 		/* Are we still cleaning up from a previous media session? */
 		if(janus_flags_is_set(&ice_handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_CLEANING)) {
 			JANUS_LOG(LOG_VERB, "[%"SCNu64"] Still cleaning up from a previous media session, let's wait a bit...\n", ice_handle->handle_id);
@@ -3080,6 +3113,7 @@ json_t *janus_plugin_handle_sdp(janus_plugin_session *plugin_session, janus_plug
 				}
 			}
 			janus_mutex_lock(&ice_handle->mutex);
+			janus_flags_clear(&ice_handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PENDING_OFFER);
 			/* We got our answer */
 			janus_flags_clear(&ice_handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PROCESSING_OFFER);
 			/* Any pending trickles? */

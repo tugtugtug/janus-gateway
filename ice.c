@@ -1264,7 +1264,7 @@ void janus_ice_webrtc_free(janus_ice_handle *handle) {
 		handle->agent = NULL;
 	}
 	handle->agent_created = 0;
-	if(handle->pending_trickles) {
+	if(handle->pending_trickles && !(janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PENDING_OFFER))) {
 		while(handle->pending_trickles) {
 			GList *temp = g_list_first(handle->pending_trickles);
 			handle->pending_trickles = g_list_remove_link(handle->pending_trickles, temp);
@@ -1272,8 +1272,8 @@ void janus_ice_webrtc_free(janus_ice_handle *handle) {
 			g_list_free(temp);
 			janus_ice_trickle_destroy(trickle);
 		}
+		handle->pending_trickles = NULL;
 	}
-	handle->pending_trickles = NULL;
 	g_free(handle->rtp_profile);
 	handle->rtp_profile = NULL;
 	g_free(handle->local_sdp);
