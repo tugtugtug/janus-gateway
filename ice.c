@@ -1188,14 +1188,6 @@ void janus_ice_webrtc_hangup(janus_ice_handle *handle, const char *reason) {
 	if(janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_ALERT))
 		return;
 	janus_flags_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_ALERT);
-	janus_plugin *plugin = (janus_plugin *)handle->app;
-	if(plugin != NULL) {
-		JANUS_LOG(LOG_VERB, "[%"SCNu64"] Telling the plugin about the hangup because of a %s (%s)\n",
-			handle->handle_id, reason, plugin->get_name());
-		if(plugin && plugin->hangup_media)
-			plugin->hangup_media(handle->app_handle);
-		janus_ice_notify_hangup(handle, reason);
-	}
 	if(handle->queued_packets != NULL)
 		g_async_queue_push(handle->queued_packets, &janus_ice_dtls_alert);
 	if(handle->send_thread == NULL) {
@@ -1232,6 +1224,20 @@ void janus_ice_webrtc_hangup(janus_ice_handle *handle, const char *reason) {
 		}
 	}
 	handle->icethread = NULL;
+	/* janus_ice_webrtc_free is skipped if JANUS_ICE_HANDLE_WEBRTC_STOP is set */
+	if (janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_STOP)) {
+		janus_plugin *plugin = (janus_plugin *)handle->app;
+		if(plugin != NULL && handle->reason) {
+			JANUS_LOG(LOG_VERB, "[%"SCNu64"] Telling the plugin about the hangup because of a %s (%s)\n",
+				handle->handle_id, handle->reason, plugin->get_name());
+			if(plugin && plugin->hangup_media)
+				plugin->hangup_media(handle->app_handle);
+			janus_ice_notify_hangup(handle, handle->reason);
+			handle->reason = NULL;
+		}
+	} else {
+		handle->reason = reason;
+	}
 }
 
 void janus_ice_webrtc_free(janus_ice_handle *handle) {
@@ -1296,6 +1302,16 @@ void janus_ice_webrtc_free(janus_ice_handle *handle) {
 	janus_flags_clear(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_HAS_AGENT);
 	janus_mutex_unlock(&handle->mutex);
 	JANUS_LOG(LOG_INFO, "[%"SCNu64"] WebRTC resources freed\n", handle->handle_id);
+	janus_plugin *plugin = (janus_plugin *)handle->app;
+	if(plugin != NULL && handle->reason) {
+		JANUS_LOG(LOG_VERB, "[%"SCNu64"] Telling the plugin about the hangup because of a %s (%s)\n",
+			handle->handle_id, handle->reason, plugin->get_name());
+		if(plugin && plugin->hangup_media)
+			plugin->hangup_media(handle->app_handle);
+		janus_ice_notify_hangup(handle, handle->reason);
+		handle->reason = NULL;
+	}
+
 }
 
 void janus_ice_stream_free(GHashTable *streams, janus_ice_stream *stream) {

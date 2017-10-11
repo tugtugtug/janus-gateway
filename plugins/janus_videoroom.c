@@ -521,6 +521,7 @@ typedef struct janus_videoroom_session {
 	gboolean started;
 	gboolean stopping;
 	volatile gint hangingup;
+	janus_videoroom_message * pending_unpublish_message; /* unpublish handled but pending media hangup */
 	gint64 destroyed;	/* Time at which this session was marked as destroyed */
 } janus_videoroom_session;
 static GHashTable *sessions;
@@ -1091,6 +1092,7 @@ void janus_videoroom_create_session(janus_plugin_session *handle, int *error) {
 	session->participant_type = janus_videoroom_p_type_none;
 	session->participant = NULL;
 	session->destroyed = 0;
+	session->pending_unpublish_message = NULL;
 	g_atomic_int_set(&session->hangingup, 0);
 	handle->plugin_handle = session;
 	janus_mutex_lock(&sessions_mutex);
@@ -1156,6 +1158,8 @@ void janus_videoroom_destroy_session(janus_plugin_session *handle, int *error) {
 		/* Any related WebRTC PeerConnection is not available anymore either */
 		janus_videoroom_hangup_media(handle);
 		session->destroyed = janus_get_monotonic_time();
+		janus_videoroom_message_free(session->pending_unpublish_message);
+		session->pending_unpublish_message = NULL;
 		old_sessions = g_list_append(old_sessions, session);
 		if(session->participant_type == janus_videoroom_p_type_publisher) {
 			/* Get rid of publisher */
@@ -2994,6 +2998,17 @@ void janus_videoroom_hangup_media(janus_plugin_session *handle) {
 	if(session->participant_type == janus_videoroom_p_type_publisher) {
 		/* This publisher just 'unpublished' */
 		janus_videoroom_participant *participant = (janus_videoroom_participant *)session->participant;
+		if (session->pending_unpublish_message) {
+			json_t *event = json_object();
+			json_object_set_new(event, "videoroom", json_string("event"));
+			json_object_set_new(event, "room", json_integer(participant->room->room_id));
+			json_object_set_new(event, "unpublished", json_string("ok"));;
+			int ret = gateway->push_event(handle, &janus_videoroom_plugin, session->pending_unpublish_message->transaction, event, NULL);
+			JANUS_LOG(LOG_VERB, "  >> Pushing unpublish done event: %d (%s)\n", ret, janus_get_api_error(ret));
+			json_decref(event);
+			janus_videoroom_message_free(session->pending_unpublish_message);
+			session->pending_unpublish_message = NULL;
+		}
 		if(participant->sdp)
 			g_free(participant->sdp);
 		participant->sdp = NULL;
@@ -3685,13 +3700,21 @@ static void *janus_videoroom_handler(void *data) {
 					g_snprintf(error_cause, 512, "Can't unpublish, not published");
 					goto error;
 				}
+				/* Now we're pending media cleanup */
+				if (session->pending_unpublish_message) {
+					/* Only one possible media session */
+					JANUS_LOG(LOG_ERR, "Unexpected pending unpublish message\n");
+					error_code = JANUS_VIDEOROOM_ERROR_UNKNOWN_ERROR;
+					g_snprintf(error_cause, 512, "Pending unpublish already exists");
+					goto error;
+				}
+				/* Move it to pending unpublish message */
+				session->pending_unpublish_message = msg;
+				JANUS_LOG(LOG_INFO, "Pending unpublish on session %p\n", session);
 				/* Tell the core to tear down the PeerConnection, hangup_media will do the rest */
 				gateway->close_pc(session->handle);
-				/* Done */
-				event = json_object();
-				json_object_set_new(event, "videoroom", json_string("event"));
-				json_object_set_new(event, "room", json_integer(participant->room->room_id));
-				json_object_set_new(event, "unpublished", json_string("ok"));
+				/* We are done with this message */
+				continue;
 			} else if(!strcasecmp(request_text, "leave")) {
 				/* Prepare an event to confirm the request */
 				event = json_object();

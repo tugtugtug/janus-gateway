@@ -342,6 +342,8 @@ struct janus_ice_handle {
 	janus_text2pcap *text2pcap;
 	/*! \brief Mutex to lock/unlock the ICE session */
 	janus_mutex mutex;
+	/*! \brief Reason to hangup */
+	const char * reason;
 };
 
 /*! \brief Janus ICE stream */
