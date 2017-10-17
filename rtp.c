@@ -250,8 +250,10 @@ void janus_rtp_header_update(janus_rtp_header *header, janus_rtp_switching_conte
 		if(context->v_seq_reset) {
 			/* Video sequence number was paused for a while: just update that */
 			context->v_seq_reset = FALSE;
+			JANUS_LOG(LOG_VERB, "Video sequence reset from %"SCNu16"-%"SCNu16" to %"SCNu16"-%"SCNu16"\n",
+				context->v_base_seq_prev, context->v_base_seq, context->v_last_seq, seq);
 			context->v_base_seq_prev = context->v_last_seq;
-			context->v_base_seq = header->seq_number;
+			context->v_base_seq = seq;
 		}
 		/* Compute a coherent timestamp and sequence number */
 		context->v_last_ts = (timestamp-context->v_base_ts) + context->v_base_ts_prev+step;
@@ -273,8 +275,10 @@ void janus_rtp_header_update(janus_rtp_header *header, janus_rtp_switching_conte
 		if(context->a_seq_reset) {
 			/* Audio sequence number was paused for a while: just update that */
 			context->a_seq_reset = FALSE;
+			JANUS_LOG(LOG_VERB, "Audio sequence reset from %"SCNu16"-%"SCNu16" to %"SCNu16"-%"SCNu16"\n",
+				context->a_base_seq_prev, context->a_base_seq, context->a_last_seq, seq);
 			context->a_base_seq_prev = context->a_last_seq;
-			context->a_base_seq = header->seq_number;
+			context->a_base_seq = seq;
 		}
 		/* Compute a coherent timestamp and sequence number */
 		context->a_last_ts = (timestamp-context->a_base_ts) + context->a_base_ts_prev+step;
